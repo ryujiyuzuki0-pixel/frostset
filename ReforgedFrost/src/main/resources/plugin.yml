@@ -1,0 +1,14 @@
+name: ReforgedFrost
+version: '${version}'
+main: dev.reforgedfrost.ReforgedFrostPlugin
+api-version: '1.21'
+description: Reforged Frost 3D armor set (MythicArmors model) with give command and optional pack hosting
+softdepend: [MythicArmors]
+commands:
+  frost:
+    description: Reforged Frost admin command
+    usage: /frost <give|pack|reload>
+    permission: reforgedfrost.admin
+permissions:
+  reforgedfrost.admin:
+    default: op
