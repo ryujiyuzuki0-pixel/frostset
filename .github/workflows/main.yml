@@ -1,0 +1,52 @@
+name: build
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Finds the plugin project wherever you put it (repo root or a subfolder like reforged_frost_setup/)
+      - name: Locate project
+        id: p
+        run: |
+          f=$(find . -name build.gradle.kts -not -path './.git/*' | head -n1)
+          if [ -z "$f" ]; then
+            echo "::error::build.gradle.kts not found. Upload the ReforgedFrost project files (build.gradle.kts, settings.gradle.kts, src/) to the repo."
+            exit 1
+          fi
+          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build
+        working-directory: ${{ steps.p.outputs.dir }}
+        run: gradle build --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReforgedFrost
+          path: ${{ steps.p.outputs.dir }}/build/libs/ReforgedFrost.jar
+
+      - name: Publish latest release
+        if: github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest "${{ steps.p.outputs.dir }}/build/libs/ReforgedFrost.jar" \
+            --title "Latest build" \
+            --notes "Auto-built from ${GITHUB_SHA::7}" \
+            --target "$GITHUB_SHA"
