@@ -1,0 +1,81 @@
+name: build
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Cancel older runs of the same branch so two builds never race on the "latest" release
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Finds the plugin project wherever you put it (repo root or a subfolder)
+      - name: Locate project
+        id: p
+        run: |
+          f=$(find . -name build.gradle.kts -not -path './.git/*' | head -n1)
+          if [ -z "$f" ]; then
+            echo "::error::build.gradle.kts not found. Upload the ReforgedFrost project files (build.gradle.kts, settings.gradle.kts, src/) to the repo."
+            exit 1
+          fi
+          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
+
+      # Regenerate the FULL 3D pack from the model on every build, so pack.zip never goes stale.
+      # (Was tools/build_pack.py, which overwrote the full pack with the old helmet-only one.)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build texture pack
+        working-directory: ${{ steps.p.outputs.dir }}
+        run: |
+          pip install pillow numpy
+          mkdir -p "$RUNNER_TEMP/pack"
+          # build in a temp dir: the script also writes preview_*.png next to its output,
+          # and those must not end up inside the jar
+          python tools/build_full_pack.py src/main/resources/models/reforged_frost_armor.bbmodel "$RUNNER_TEMP/pack/pack.zip"
+          cp "$RUNNER_TEMP/pack/pack.zip" src/main/resources/pack.zip
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      # Point the plugin at this repo's release asset so players download without any open port
+      - name: Set pack URL
+        working-directory: ${{ steps.p.outputs.dir }}
+        run: sed -i "s#REPO_SLUG#${{ github.repository }}#" src/main/resources/config.yml
+
+      - name: Build
+        working-directory: ${{ steps.p.outputs.dir }}
+        run: gradle build --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReforgedFrost
+          path: |
+            ${{ steps.p.outputs.dir }}/build/libs/ReforgedFrost.jar
+            ${{ steps.p.outputs.dir }}/src/main/resources/pack.zip
+            ${{ runner.temp }}/pack/preview_*.png
+
+      - name: Publish latest release
+        if: github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest "${{ steps.p.outputs.dir }}/build/libs/ReforgedFrost.jar" \
+            "${{ steps.p.outputs.dir }}/src/main/resources/pack.zip" \
+            --title "Latest build" \
+            --notes "Auto-built from ${GITHUB_SHA::7}" \
+            --target "$GITHUB_SHA"
